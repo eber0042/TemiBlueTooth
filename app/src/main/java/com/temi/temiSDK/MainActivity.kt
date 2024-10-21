@@ -5,6 +5,9 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothDevice.BOND_BONDED
+import android.bluetooth.BluetoothDevice.BOND_BONDING
+import android.bluetooth.BluetoothDevice.BOND_NONE
 import android.bluetooth.BluetoothManager
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -50,6 +53,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import okio.IOException
+import java.util.UUID
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -79,12 +83,14 @@ fun BluetoothScreen() {
         rememberPermissionState(permission = Manifest.permission.ACCESS_FINE_LOCATION)
 
     val pairedDevices = remember { mutableStateListOf<BluetoothDevice>() }
+    val MY_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(2000)
-        }
-    }
+//    LaunchedEffect(Unit) {
+//        while (true) {
+//            delay(2000)
+//        }
+//    }
+
     // State for tracking discovered devices and scanning state
     val discoveredDevices = remember { mutableStateOf(mutableListOf<BluetoothDevice>()) }
     var isScanning by remember { mutableStateOf(false) }
@@ -105,6 +111,7 @@ fun BluetoothScreen() {
     // Handle discovery timeout (e.g., 12 seconds)
     LaunchedEffect(isScanning) {
         if (isScanning) {
+            discoveredDevices.value.clear() // Clear previous devices
             delay(12000) // Set timeout for scanning
             if (ActivityCompat.checkSelfPermission(
                     context, Manifest.permission.BLUETOOTH_SCAN
@@ -148,12 +155,6 @@ fun BluetoothScreen() {
         }
     }
 
-    // Handle updating pairedDevices
-    LaunchedEffect(pairedDevices) {
-
-    }
-
-
     // Pair with selected device
     fun pairWithDevice(device: BluetoothDevice, pairedDevices: MutableList<BluetoothDevice>) {
         // Initiate pairing
@@ -170,6 +171,39 @@ fun BluetoothScreen() {
             }
         } else {
             Log.e("DATA!", "Failed to pair with device: ${device.name}")
+        }
+    }
+
+    // Function to connect to the device after pairing or if already bonded
+    fun connectToDevice(device: BluetoothDevice) {
+        // Here you would initiate a connection, depending on the type of Bluetooth profile you're using (e.g., BluetoothSocket, GATT, etc.)
+        Log.i("DATA!", "Attempting to connect to device: ${device.name}")
+
+        // Example for Bluetooth Classic using BluetoothSocket (for SPP profile)
+        try {
+            val socket = device.createRfcommSocketToServiceRecord(MY_UUID)
+            socket.connect() // Connect to the device
+            Log.i("DATA!", "Connected to device: ${device.name}")
+            // You can now send data through the socket
+        } catch (e: Exception) {
+            Log.e("DATA!", "Failed to connect to device: ${device.name}, Error: ${e.message}")
+        }
+    }
+
+    // Handle pairing and connection
+    fun handleDevicePairingAndConnection(device: BluetoothDevice, pairedDevices: MutableList<BluetoothDevice>) {
+        when (device.bondState) {
+            BOND_BONDED -> {
+                Log.i("DATA!", "Device already paired: ${device.name}, Attempting to connect...")
+                connectToDevice(device) // Device is already paired, initiate connection
+            }
+            BOND_NONE -> {
+                Log.i("DATA!", "Device not paired: ${device.name}, Attempting to pair...")
+                pairWithDevice(device, pairedDevices) // Device is not paired, attempt pairing first
+            }
+            BOND_BONDING -> {
+                Log.i("DATA!", "Pairing in progress with device: ${device.name}")
+            }
         }
     }
 
@@ -194,8 +228,7 @@ fun BluetoothScreen() {
         }
     }
      */
-
-
+    
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
@@ -249,7 +282,7 @@ fun BluetoothScreen() {
                                 modifier = Modifier
                                     .fillMaxWidth() // Ensure the row takes the full width
                                     .clickable {
-                                        pairWithDevice(device, pairedDevices) // Initiate pairing
+                                        handleDevicePairingAndConnection(device, pairedDevices) // Initiate pairing
                                         // Uncomment below to send data after pairing
                                         // connectAndSendData(device, "Hello from Bluetooth!") // Send data
                                     }
