@@ -7,7 +7,6 @@ import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
-import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
@@ -15,6 +14,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
@@ -60,72 +60,81 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-class BleManager(private val bluetoothGatt: BluetoothGatt, context: Context) {
 
-    private val context = context
+class BleManager(private val context: Context, private val device: BluetoothDevice) {
+    private var bluetoothGatt: BluetoothGatt? = null
+    private var isDiscoveryCompleted = false
 
-    companion object {
-        private val BATTERY_SERVICE_UUID = UUID.fromString("0000180F-0000-1000-8000-00805f9b34fb")
-        private val BATTERY_LEVEL_UUID = UUID.fromString("00002A19-0000-1000-8000-00805f9b34fb")
-    }
-
-    // Read the battery level
-    fun readBatteryLevel() {
-        val batteryService: BluetoothGattService? = bluetoothGatt.getService(BATTERY_SERVICE_UUID)
-        val batteryLevelCharacteristic: BluetoothGattCharacteristic? = batteryService?.getCharacteristic(BATTERY_LEVEL_UUID)
-
-        if (batteryLevelCharacteristic != null) {
-            if (ActivityCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.BLUETOOTH_CONNECT
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                // TODO: Consider calling
-                //    ActivityCompat#requestPermissions
-                // here to request the missing permissions, and then overriding
-                //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-                //                                          int[] grantResults)
-                // to handle the case where the user grants the permission. See the documentation
-                // for ActivityCompat#requestPermissions for more details.
-                return
-            }
-            bluetoothGatt.readCharacteristic(batteryLevelCharacteristic)
-        } else {
-            // Handle the case where the battery level characteristic is not found
-            handleCharacteristicNotFound()
-        }
-    }
-
-    // Callback to handle read results
     private val gattCallback = object : BluetoothGattCallback() {
-        override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                if (characteristic.uuid == BATTERY_LEVEL_UUID) {
-                    val batteryLevel = characteristic.getIntValue(BluetoothGattCharacteristic.FORMAT_UINT8, 0)
-                    handleBatteryLevelRead(batteryLevel)
+        @SuppressLint("MissingPermission")
+        override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
+            when (newState) {
+                BluetoothProfile.STATE_CONNECTED -> {
+                    Log.i("Bluetooth!", "Device connected: ${gatt?.device?.name}")
+                    bluetoothGatt?.discoverServices()
                 }
+                BluetoothProfile.STATE_DISCONNECTED -> {
+                    Log.i("Bluetooth!", "Disconnected from GATT server.")
+                    bluetoothGatt?.close()
+                    bluetoothGatt = null
+                }
+            }
+        }
+
+        @SuppressLint("MissingPermission")
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.i("Bluetooth!", "Services discovered")
+
+                val batteryService = gatt.getService(UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb"))
+                val batteryLevelCharacteristic = batteryService?.getCharacteristic(UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb"))
+
+                if (batteryLevelCharacteristic != null) {
+                    // Enable notifications for the battery level characteristic
+                    gatt.setCharacteristicNotification(batteryLevelCharacteristic, true)
+
+                    // Enable notifications via CCCD
+                    val descriptor = batteryLevelCharacteristic.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+                    descriptor?.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    gatt.writeDescriptor(descriptor)
+                }
+                isDiscoveryCompleted = true
             } else {
-                // Handle read error
-                handleReadError(status)
+                Log.w("Bluetooth!", "onServicesDiscovered received: $status")
+            }
+        }
+
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray
+        ) {
+            super.onCharacteristicChanged(gatt, characteristic, value)
+
+            // Log the battery level if it has changed
+            if (characteristic.uuid == UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")) {
+                val batteryLevel = value.first().toInt() and 0xFF // Convert byte to unsigned int
+                Log.i("Bluetooth!", "Battery level changed: $batteryLevel%")
             }
         }
     }
 
-    private fun handleBatteryLevelRead(level: Int) {
-        // Process the battery level here
-        Log.i("Bluetooth!", "Battery Level: $level%")
+    @SuppressLint("MissingPermission")
+    fun connectToDevice() {
+        Log.i("Bluetooth!", "Trying to connect to: ${device.name} (${device.address})")
+        bluetoothGatt = device.connectGatt(context, false, gattCallback)
     }
 
-    private fun handleCharacteristicNotFound() {
-        // Logic for handling the case when the characteristic is not found
-        println("Battery Level Characteristic not found")
-    }
-
-    private fun handleReadError(status: Int) {
-        // Logic for handling read error
-        println("Failed to read characteristic. Status: $status")
+    @SuppressLint("MissingPermission")
+    fun disconnect() {
+        bluetoothGatt?.disconnect()
+        bluetoothGatt?.close()
+        bluetoothGatt = null
+        isDiscoveryCompleted = false
+        Log.i("Bluetooth!", "Disconnected from GATT server.")
     }
 }
+
 
 @SuppressLint("MissingPermission")
 @OptIn(ExperimentalPermissionsApi::class)
@@ -134,14 +143,14 @@ fun BluetoothScreen() {
     val context = LocalContext.current
     val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     val bluetoothAdapter = bluetoothManager.adapter
+
     val permissionState = rememberPermissionState(Manifest.permission.BLUETOOTH)
     val fineLocationPermissionState =
         rememberPermissionState(permission = Manifest.permission.ACCESS_FINE_LOCATION)
+
     val discoveredDevices = remember { mutableStateOf(mutableListOf<BluetoothDevice>()) }
     var isScanning by remember { mutableStateOf(false) }
     var dots by remember { mutableIntStateOf(0) }
-    var bluetoothGatt: BluetoothGatt? by remember { mutableStateOf(null) }
-    val MY_UUID: UUID = UUID.fromString("00001812-0000-1000-8000-00805f9b34fb")
 
     // Dots animation for scanning indication
     LaunchedEffect(isScanning) {
@@ -155,7 +164,7 @@ fun BluetoothScreen() {
         }
     }
 
-    // Handle discovery timeout (e.g., 12 seconds)
+// Handle discovery timeout (e.g., 12 seconds)
     LaunchedEffect(isScanning) {
         if (isScanning) {
             discoveredDevices.value.clear() // Clear previous devices
@@ -176,7 +185,7 @@ fun BluetoothScreen() {
         override fun onScanResult(callbackType: Int, result: android.bluetooth.le.ScanResult) {
             super.onScanResult(callbackType, result)
             val device = result.device
-            if (!discoveredDevices.value.any { it.address == device.address }) {
+            if (!discoveredDevices.value.any { it.address == device.address } && device.name != null) {
                 discoveredDevices.value.add(device)
             }
         }
@@ -185,7 +194,7 @@ fun BluetoothScreen() {
             super.onBatchScanResults(results)
             results.forEach { result ->
                 val device = result.device
-                if (!discoveredDevices.value.any { it.address == device.address }) {
+                if (!discoveredDevices.value.any { it.address == device.address } && device.name != null) {
                     discoveredDevices.value.add(device)
                 }
             }
@@ -208,95 +217,6 @@ fun BluetoothScreen() {
             scanner.startScan(leScanCallback.value)
             isScanning = true
         }
-    }
-
-    // Connect to BLE device
-    fun connectToDevice(device: BluetoothDevice) {
-        bluetoothGatt = device.connectGatt(context, false, object : BluetoothGattCallback() {
-            override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
-                super.onConnectionStateChange(gatt, status, newState)
-                if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    Log.i("Bluetooth!", "Connected to GATT server.")
-                    // Discover services
-                    bluetoothGatt?.discoverServices()
-                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    Log.i("Bluetooth!", "Disconnected from GATT server.")
-                }
-            }
-
-            override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
-                super.onServicesDiscovered(gatt, status)
-                if (status == BluetoothGatt.GATT_SUCCESS) {
-                    Log.i("Bluetooth!", "Services discovered.")
-                    // You can start reading/writing characteristics here
-                } else {
-                    Log.w("Bluetooth!", "onServicesDiscovered received: $status")
-                }
-            }
-        })
-    }
-
-    // Connect to BLE mouse
-    fun connectToMouse(device: BluetoothDevice) {
-        bluetoothGatt = device.connectGatt(context, false, object : BluetoothGattCallback() {
-            override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
-                super.onConnectionStateChange(gatt, status, newState)
-                if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    Log.i("Bluetooth!", "Connected to BLE mouse GATT server.")
-                    // Discover services
-                    bluetoothGatt?.discoverServices()
-                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    Log.i("Bluetooth!", "Disconnected from BLE mouse GATT server.")
-                    bluetoothGatt?.close() // Ensure to close the GATT connection
-                    bluetoothGatt = null // Reset the GATT reference
-                }
-            }
-
-            override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
-                super.onServicesDiscovered(gatt, status)
-                if (status == BluetoothGatt.GATT_SUCCESS) {
-                    Log.i("Bluetooth!", "Mouse services discovered.")
-
-                    // Log all discovered services and their characteristics
-                    gatt?.services?.forEach { service ->
-                        Log.i("Bluetooth!", "Service UUID: ${service.uuid}")
-
-                        // List characteristics of the service
-                        service.characteristics.forEach { characteristic ->
-                            Log.i("Bluetooth!", "Characteristic UUID: ${characteristic.uuid}")
-                            Log.i("Bluetooth!", "Properties: ${characteristic.properties}")
-
-                            // Optionally read the characteristic here
-                            // If it's readable, you can read it
-                            if (characteristic.properties and BluetoothGattCharacteristic.PROPERTY_READ > 0) {
-                                gatt.readCharacteristic(characteristic)
-                            }
-
-                            // If it has notifications or indications, you might want to enable them
-                            if (characteristic.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY > 0) {
-                                gatt.setCharacteristicNotification(characteristic, true)
-                                // You might need to configure the descriptor as well for notifications
-                                val descriptor = characteristic.getDescriptor(MY_UUID)
-                                descriptor?.let {
-                                    it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                                    gatt.writeDescriptor(it)
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    Log.w("Bluetooth!", "onServicesDiscovered received: $status")
-                }
-            }
-
-            override fun onCharacteristicRead(gatt: BluetoothGatt?, characteristic: BluetoothGattCharacteristic?, status: Int) {
-                super.onCharacteristicRead(gatt, characteristic, status)
-                if (status == BluetoothGatt.GATT_SUCCESS) {
-                    // Handle the characteristic value
-                    Log.i("Bluetooth!", "Characteristic read: ${characteristic?.value?.joinToString()}")
-                }
-            }
-        })
     }
 
     // UI layout
@@ -330,9 +250,9 @@ fun BluetoothScreen() {
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        connectToMouse(device)
-                                        bluetoothGatt?.let { BleManager(it, context) }
-                                            ?.readBatteryLevel()
+                                        val bleManager = BleManager(context, device)
+                                        bleManager.connectToDevice()
+                                       //bleManager.getDeviceName()
                                     }
                                     .padding(vertical = 8.dp)
                             ) {
