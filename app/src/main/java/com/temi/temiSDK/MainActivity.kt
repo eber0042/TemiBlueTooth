@@ -7,7 +7,6 @@ import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
-import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
@@ -47,6 +46,7 @@ import com.temi.temiSDK.ui.theme.GreetMiTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
 import java.util.UUID
+
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -145,6 +145,19 @@ class BleManager(private val context: Context, private val device: BluetoothDevi
                 Log.w("Bluetooth!", "onCharacteristicRead failed with status: $status")
             }
         }
+
+        // Check Characteristic changed
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt?,
+            characteristic: BluetoothGattCharacteristic
+        ) {
+            super.onCharacteristicChanged(gatt, characteristic)
+            // Format Read data to string value
+            val result = characteristic.getStringValue(0)
+            // Send to Read data to string variable
+
+            Log.w("Bluetooth!", "onCharacteristicRead failed with status: $result")
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -154,14 +167,23 @@ class BleManager(private val context: Context, private val device: BluetoothDevi
             return
         }
         while (!isDiscoveryCompleted) {}
-        val batteryService = bluetoothGatt?.getService(UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e"))
-        val batteryLevelCharacteristic = batteryService?.getCharacteristic(UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e"))
+        val UartService = bluetoothGatt?.getService(UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e"))
+        val RxCharacteristic = UartService?.getCharacteristic(UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e"))
+        val TxCharacteristic = UartService?.getCharacteristic(UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e"))
 
-        if (batteryLevelCharacteristic == null) {
+        val RxDescriptor = RxCharacteristic?.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+        bluetoothGatt!!.setCharacteristicNotification(RxCharacteristic, true)
+        if (RxDescriptor != null) {
+            RxDescriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+        }
+
+        bluetoothGatt!!.writeDescriptor(RxDescriptor);
+
+        if (TxCharacteristic == null) {
             Log.e("Bluetooth!", "Characteristic not found.")
             return
         }
-        val success = bluetoothGatt?.readCharacteristic(batteryLevelCharacteristic) ?: false
+        val success = bluetoothGatt?.readCharacteristic(RxCharacteristic) ?: false
         if (!success) {
             Log.e("Bluetooth!", "Failed to initiate characteristic")
         }
