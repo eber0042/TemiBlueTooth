@@ -37,7 +37,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
@@ -332,56 +336,85 @@ fun BluetoothScreen() {
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             if (!fineLocationPermissionState.status.isGranted || !permissionState.status.isGranted) {
-                Text("Permissions denied.")
-                Button(onClick = {
-                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                    val uri = Uri.fromParts("package", context.packageName, null)
-                    intent.data = uri
-                    context.startActivity(intent)
-                }) {
-                    Text("Go to Settings")
+                Text(
+                    "Permissions denied.",
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    onClick = {
+                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        val uri = Uri.fromParts("package", context.packageName, null)
+                        intent.data = uri
+                        context.startActivity(intent)
+                    },
+                    modifier = Modifier.padding(top = 8.dp) // Optional padding to add spacing around the button
+                ) {
+                    Text(
+                        "Go to Settings",
+                        textAlign = TextAlign.Center
+                    )
                 }
             } else {
-                Button(onClick = {
-                    toggleScan()
-                }) {
-                    Text(if (isScanning) "Stop Scanning${".".repeat(dots)}" else "Start Scanning")
+                Button(
+                    onClick = { toggleScan() },
+                    modifier = Modifier.padding(top = 8.dp) // Optional padding to add spacing around the button
+                ) {
+                    Text(
+                        if (isScanning) "Stop Scanning${".".repeat(dots)}" else "Start Scanning",
+                        textAlign = TextAlign.Center
+                    )
                 }
 
-                if (discoveredDevices.value.isNotEmpty()) {
-                    Text("Discovered Devices:")
-                    LazyColumn {
+                if (isScanning) {
+                    // You can add more centered text or loading indicators here if needed
+                } else if (discoveredDevices.value.isNotEmpty()) {
+                    Text(
+                        "--Discovered Devices--",
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
                         items(discoveredDevices.value) { device ->
-                            Row(
+                            Box(
                                 modifier = Modifier
-                                    .fillMaxWidth()
                                     .clickable {
                                         val bleManager = BleManager(context, device)
                                         bleManager.connectToDevice()
                                         bleManager.getData()
                                     }
                                     .padding(vertical = 8.dp)
+                                    .fillMaxWidth(),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = "${device.name} || ${device.address}",
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .padding(end = 16.dp)
-                                )
-                                Text(
-                                    text = "Connect",
-                                    color = Color.Blue,
-                                    modifier = Modifier
-                                        .padding(start = 16.dp)
-                                        .align(Alignment.CenterVertically)
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    style = TextStyle(
+                                        fontSize = 20.sp, // Increase font size as needed
+                                        fontWeight = FontWeight.Bold // Optional: make the text bold
+                                    )
                                 )
                             }
                         }
                     }
                 } else {
-                    Text("No devices discovered.")
+                    Text(
+                        "No devices discovered.",
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
         }
