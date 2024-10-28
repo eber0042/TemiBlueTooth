@@ -156,7 +156,21 @@ class BleManager(private val context: Context, private val device: BluetoothDevi
             val result = characteristic.getStringValue(0)
             // Send to Read data to string variable
 
-            Log.w("Bluetooth!", "onCharacteristicRead failed with status: $result")
+            Log.w("Bluetooth!", "onCharacteristicRead: $result")
+        }
+
+        override fun onCharacteristicWrite(
+            gatt: BluetoothGatt?,
+            characteristic: BluetoothGattCharacteristic?,
+            status: Int
+        ) {
+            super.onCharacteristicWrite(gatt, characteristic, status)
+
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.i("Bluetooth!", "Message sent successfully!")
+            } else {
+                Log.e("Bluetooth!", "Failed to send message. Status: $status")
+            }
         }
     }
 
@@ -171,22 +185,28 @@ class BleManager(private val context: Context, private val device: BluetoothDevi
         val RxCharacteristic = UartService?.getCharacteristic(UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e"))
         val TxCharacteristic = UartService?.getCharacteristic(UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e"))
 
-        val RxDescriptor = RxCharacteristic?.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
-        bluetoothGatt!!.setCharacteristicNotification(RxCharacteristic, true)
-        if (RxDescriptor != null) {
-            RxDescriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-        }
+        val s_data = "s"
 
-        bluetoothGatt!!.writeDescriptor(RxDescriptor);
+        // Formatting write Data for Arduino
+        if (TxCharacteristic != null) {
+            TxCharacteristic.writeType = TxCharacteristic.writeType
+            TxCharacteristic.setValue(s_data)
+        }
 
         if (TxCharacteristic == null) {
             Log.e("Bluetooth!", "Characteristic not found.")
             return
         }
-        val success = bluetoothGatt?.readCharacteristic(RxCharacteristic) ?: false
+        val success = bluetoothGatt?.writeCharacteristic(TxCharacteristic) ?: false
         if (!success) {
             Log.e("Bluetooth!", "Failed to initiate characteristic")
         }
+
+//        //         Enable notifications to receive messages
+        val RxDescriptor = RxCharacteristic?.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+        bluetoothGatt!!.setCharacteristicNotification(RxCharacteristic, true)
+        RxDescriptor?.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+        bluetoothGatt!!.writeDescriptor(RxDescriptor)
     }
 
     fun connectToDevice() {
