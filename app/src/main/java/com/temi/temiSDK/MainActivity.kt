@@ -276,6 +276,8 @@ fun BluetoothScreen() {
     var isScanning by remember { mutableStateOf(false) }
     var dots by remember { mutableIntStateOf(0) }
 
+    var bleManager: BleManager? = null
+
     // Dots animation for scanning indication
     LaunchedEffect(isScanning) {
         if (isScanning) {
@@ -372,6 +374,13 @@ fun BluetoothScreen() {
                     Text(if (isScanning) "Stop Scanning${".".repeat(dots)}" else "Start Scanning", textAlign = TextAlign.Center)
                 }
 
+                Button(
+                    onClick = { bleManager?.moveServo() },
+                    modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    Text("Move Servo", textAlign = TextAlign.Center)
+                }
+
                 if (isScanning) {
                     // Optional loading indicator can go here
                 } else if (discoveredDevices.value.isNotEmpty()) {
@@ -388,19 +397,10 @@ fun BluetoothScreen() {
                             Box(
                                 modifier = Modifier
                                     .clickable {
-                                        val bleManager = BleManager(context, bleDevice)
-                                        // prevent the device from connecting if already connected
-                                        if (bleDevice.state != ConnectionState.CONNECTED) {
-                                            bleDevice.state = bleManager.connectToDevice()
-                                            // Trying to refresh
-                                            isScanning = true
-                                            isScanning = false
-                                        } else {
-                                            bleManager.disconnect()
-                                            bleDevice.state = ConnectionState.DISCONNECTED
-                                            isScanning = true
-                                            isScanning = false
-                                        }
+                                        // Made a system were only one device can be connect at a time
+                                        bleManager?.disconnect() // Disconnect previous
+                                        bleManager = BleManager(context, bleDevice) // Set new
+                                        bleManager?.connectToDevice() // Connect new
                                     }
                                     .padding(vertical = 8.dp)
                                     .fillMaxWidth(),
