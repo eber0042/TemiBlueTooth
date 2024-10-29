@@ -24,7 +24,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -66,7 +65,18 @@ class MainActivity : ComponentActivity() {
 }
 
 
-class BleManager(private val context: Context, private val device: BluetoothDevice) {
+enum class ConnectionState() {
+    CONNECTED,
+    DISCONNECTED,
+    DISCONNECTED_WITHOUT_INTENT
+}
+
+data class BleDevice(
+    var device: BluetoothDevice? = null,
+    var state: ConnectionState = ConnectionState.DISCONNECTED
+)
+
+class BleManager(private val context: Context, private val deviceData: BleDevice) {
     private var bluetoothGatt: BluetoothGatt? = null
     private var isDiscoveryCompleted = false
     private val serviceUUIDs = mutableListOf<UUID>()
@@ -187,6 +197,17 @@ class BleManager(private val context: Context, private val device: BluetoothDevi
         while (!isDiscoveryCompleted) {}
         val UartService = bluetoothGatt?.getService(UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e"))
         val RxCharacteristic = UartService?.getCharacteristic(UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e"))
+
+//        //         Enable notifications to receive messages
+        val RxDescriptor = RxCharacteristic?.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
+        bluetoothGatt!!.setCharacteristicNotification(RxCharacteristic, true)
+        RxDescriptor?.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+        bluetoothGatt!!.writeDescriptor(RxDescriptor)
+    }
+
+    @SuppressLint("MissingPermission")
+    fun moveServo() {
+        val UartService = bluetoothGatt?.getService(UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e"))
         val TxCharacteristic = UartService?.getCharacteristic(UUID.fromString("6e400002-b5a3-f393-e0a9-e50e24dcca9e"))
 
         val s_data = "s"
@@ -205,39 +226,32 @@ class BleManager(private val context: Context, private val device: BluetoothDevi
         if (!success) {
             Log.e("Bluetooth!", "Failed to initiate characteristic")
         }
-
-//        //         Enable notifications to receive messages
-        val RxDescriptor = RxCharacteristic?.getDescriptor(UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"))
-        bluetoothGatt!!.setCharacteristicNotification(RxCharacteristic, true)
-        RxDescriptor?.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-        bluetoothGatt!!.writeDescriptor(RxDescriptor)
     }
 
-    fun connectToDevice() {
-        Log.i("Bluetooth!", "Trying to connect to: ${device.name} (${device.address})")
+    fun connectToDevice(): ConnectionState {
+        Log.i("Bluetooth!", "Trying to connect to: ${deviceData.device?.name} (${deviceData.device?.address})")
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
                 Log.e("Bluetooth!", "Missing BLUETOOTH_CONNECT permission")
-                return
+                return ConnectionState.DISCONNECTED_WITHOUT_INTENT
             }
         }
 
-        bluetoothGatt = device.connectGatt(context, false, gattCallback)
+        bluetoothGatt = deviceData.device?.connectGatt(context, false, gattCallback)
 
         if (bluetoothGatt != null) {
             Log.i("Bluetooth!", "GATT connection initiated")
+            return ConnectionState.CONNECTED
         } else {
             Log.e("Bluetooth!", "Failed to initiate GATT connection")
+            return ConnectionState.DISCONNECTED_WITHOUT_INTENT
         }
     }
 
-    fun disconnect() {
-        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            Log.e("Bluetooth!", "Missing BLUETOOTH_CONNECT permission, cannot disconnect")
-            return
-        }
 
+    @SuppressLint("MissingPermission")
+    fun disconnect() {
         bluetoothGatt?.disconnect()
         bluetoothGatt?.close()
         bluetoothGatt = null
@@ -245,8 +259,6 @@ class BleManager(private val context: Context, private val device: BluetoothDevi
         Log.i("Bluetooth!", "Disconnected from GATT server.")
     }
 }
-
-
 
 @SuppressLint("MissingPermission")
 @OptIn(ExperimentalPermissionsApi::class)
@@ -256,18 +268,18 @@ fun BluetoothScreen() {
     val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     val bluetoothAdapter = bluetoothManager.adapter
 
+    // Permissions
     val permissionState = rememberPermissionState(Manifest.permission.BLUETOOTH)
-    val fineLocationPermissionState =
-        rememberPermissionState(permission = Manifest.permission.ACCESS_FINE_LOCATION)
+    val fineLocationPermissionState = rememberPermissionState(Manifest.permission.ACCESS_FINE_LOCATION)
 
-    val discoveredDevices = remember { mutableStateOf(mutableListOf<BluetoothDevice>()) }
+    val discoveredDevices = remember { mutableStateOf(mutableSetOf<BleDevice>()) } // Using Set for unique devices
     var isScanning by remember { mutableStateOf(false) }
     var dots by remember { mutableIntStateOf(0) }
 
     // Dots animation for scanning indication
     LaunchedEffect(isScanning) {
         if (isScanning) {
-            while (true) {
+            while (isScanning) {
                 delay(500)
                 dots = (dots + 1) % 4
             }
@@ -276,29 +288,24 @@ fun BluetoothScreen() {
         }
     }
 
-// Handle discovery timeout (e.g., 12 seconds)
+    // Handle discovery timeout
     LaunchedEffect(isScanning) {
         if (isScanning) {
             discoveredDevices.value.clear() // Clear previous devices
-            delay(12000) // Set timeout for scanning
-            if (ActivityCompat.checkSelfPermission(
-                    context, Manifest.permission.BLUETOOTH_SCAN
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                bluetoothAdapter.cancelDiscovery()
-                isScanning = false
-                Log.i("Bluetooth!", "Discovery timed out")
-            }
+            delay(12000) // Scanning timeout
+            bluetoothAdapter.cancelDiscovery()
+            isScanning = false
+            Log.i("Bluetooth!", "Discovery timed out")
         }
     }
 
     // BLE scan callback
-    val leScanCallback = rememberUpdatedState(newValue = object : ScanCallback() {
+    val leScanCallback = rememberUpdatedState(object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: android.bluetooth.le.ScanResult) {
             super.onScanResult(callbackType, result)
             val device = result.device
-            if (!discoveredDevices.value.any { it.address == device.address } && device.name != null) {
-                discoveredDevices.value.add(device)
+            if (device.name != null) {
+                discoveredDevices.value.add(BleDevice(device = device))
             }
         }
 
@@ -306,8 +313,8 @@ fun BluetoothScreen() {
             super.onBatchScanResults(results)
             results.forEach { result ->
                 val device = result.device
-                if (!discoveredDevices.value.any { it.address == device.address } && device.name != null) {
-                    discoveredDevices.value.add(device)
+                if (device.name != null) {
+                    discoveredDevices.value.add(BleDevice(device = device))
                 }
             }
         }
@@ -320,26 +327,24 @@ fun BluetoothScreen() {
 
     // Start or stop scanning
     fun toggleScan() {
+        val scanner = bluetoothManager.adapter.bluetoothLeScanner
         if (isScanning) {
-            val scanner = bluetoothManager.adapter.bluetoothLeScanner
             scanner.stopScan(leScanCallback.value)
             isScanning = false
         } else {
-            val scanner = bluetoothManager.adapter.bluetoothLeScanner
             scanner.startScan(leScanCallback.value)
             isScanning = true
         }
     }
 
     // UI layout
+
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
         Column(
-            modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             if (!fineLocationPermissionState.status.isGranted || !permissionState.status.isGranted) {
@@ -355,26 +360,20 @@ fun BluetoothScreen() {
                         intent.data = uri
                         context.startActivity(intent)
                     },
-                    modifier = Modifier.padding(top = 8.dp) // Optional padding to add spacing around the button
+                    modifier = Modifier.padding(top = 8.dp)
                 ) {
-                    Text(
-                        "Go to Settings",
-                        textAlign = TextAlign.Center
-                    )
+                    Text("Go to Settings", textAlign = TextAlign.Center)
                 }
             } else {
                 Button(
                     onClick = { toggleScan() },
-                    modifier = Modifier.padding(top = 8.dp) // Optional padding to add spacing around the button
+                    modifier = Modifier.padding(top = 8.dp)
                 ) {
-                    Text(
-                        if (isScanning) "Stop Scanning${".".repeat(dots)}" else "Start Scanning",
-                        textAlign = TextAlign.Center
-                    )
+                    Text(if (isScanning) "Stop Scanning${".".repeat(dots)}" else "Start Scanning", textAlign = TextAlign.Center)
                 }
 
                 if (isScanning) {
-                    // You can add more centered text or loading indicators here if needed
+                    // Optional loading indicator can go here
                 } else if (discoveredDevices.value.isNotEmpty()) {
                     Text(
                         "--Discovered Devices--",
@@ -385,36 +384,44 @@ fun BluetoothScreen() {
                         modifier = Modifier.fillMaxWidth(),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        items(discoveredDevices.value) { device ->
+                        items(discoveredDevices.value.toList()) { bleDevice -> // Convert Set to List for LazyColumn
                             Box(
                                 modifier = Modifier
                                     .clickable {
-                                        val bleManager = BleManager(context, device)
-                                        bleManager.connectToDevice()
-                                        bleManager.getData()
+                                        val bleManager = BleManager(context, bleDevice)
+                                        // prevent the device from connecting if already connected
+                                        if (bleDevice.state != ConnectionState.CONNECTED) {
+                                            bleDevice.state = bleManager.connectToDevice()
+                                            // Trying to refresh
+                                            isScanning = true
+                                            isScanning = false
+                                        } else {
+                                            bleManager.disconnect()
+                                            bleDevice.state = ConnectionState.DISCONNECTED
+                                            isScanning = true
+                                            isScanning = false
+                                        }
                                     }
                                     .padding(vertical = 8.dp)
                                     .fillMaxWidth(),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = "${device.name} || ${device.address}",
+                                    text = "${bleDevice.device?.name} || ${bleDevice.device?.address}",
                                     textAlign = TextAlign.Center,
+                                    color = when (bleDevice.state) {
+                                        ConnectionState.CONNECTED -> Color.Green
+                                        ConnectionState.DISCONNECTED_WITHOUT_INTENT -> Color.Red
+                                        else -> Color.Blue
+                                    },
                                     modifier = Modifier.fillMaxWidth(),
-                                    style = TextStyle(
-                                        fontSize = 20.sp, // Increase font size as needed
-                                        fontWeight = FontWeight.Bold // Optional: make the text bold
-                                    )
+                                    style = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold)
                                 )
                             }
                         }
                     }
                 } else {
-                    Text(
-                        "No devices discovered.",
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    Text("No devices discovered.", textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                 }
             }
         }
